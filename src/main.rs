@@ -7,6 +7,9 @@ use curl::Error as CurlError;
 use log::*;
 use serde::Deserialize;
 use serde_json::Error as JsonError;
+use url::Url;
+
+const DEFAULT_SERVER: &'static str = "localhost:8000";
 
 #[derive(Debug)]
 enum Error {
@@ -64,12 +67,14 @@ fn main() -> Result<(), Error> {
         .about("Provides a (slightly) better interface to Ktra than through curl.")
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .arg(
-            Arg::with_name("server_addr")
-                .short("a")
-                .long("addr")
+            Arg::with_name("server")
+                .short("s")
+                .long("server")
                 .takes_value(true)
-                .validator(server_addr_validator),
+                .empty_values(false)
+                .validator(server_validator),
         )
+        // TODO: flag to select https
         .subcommand(
             SubCommand::with_name("new")
                 .arg(
@@ -106,17 +111,22 @@ fn main() -> Result<(), Error> {
         )
         .get_matches();
 
+    let server = matches.value_of("server").unwrap_or(DEFAULT_SERVER);
+
     match matches.subcommand() {
-        ("new", Some(sub_m)) => new_user(sub_m),
-        ("login", Some(sub_m)) => login_user(sub_m),
-        ("password", Some(sub_m)) => change_password(sub_m),
+        ("new", Some(sub_m)) => new_user(sub_m, server),
+        ("login", Some(sub_m)) => login_user(sub_m, server),
+        ("password", Some(sub_m)) => change_password(sub_m, server),
         (_, _) => panic!("subcommand not matched"),
     }
 }
 
-fn server_addr_validator(_server_name: String) -> Result<(), String> {
-    // TODO:
-    Ok(())
+fn server_validator(server: String) -> Result<(), String> {
+    if let Err(e) = Url::parse(&server) {
+        Err(format!("URL parsing error: {}", e))
+    } else {
+        Ok(())
+    }
 }
 
 fn username_validator(username: String) -> Result<(), String> {
@@ -132,17 +142,14 @@ fn username_validator(username: String) -> Result<(), String> {
     }
 }
 
-fn new_user(matches: &ArgMatches) -> Result<(), Error> {
+fn new_user(matches: &ArgMatches, server: &str) -> Result<(), Error> {
     let user = matches.value_of("user").expect("no username set");
     let pass = matches.value_of("pass").expect("no password set");
 
     info!("new_user: user=\"{}\" pass=\"{}\"", user, pass);
 
     let mut handle = Easy::new();
-    handle.url(&format!(
-        "http://localhost:8000/ktra/api/v1/new_user/{}",
-        user
-    ))?;
+    handle.url(&format!("http://{}/ktra/api/v1/new_user/{}", server, user))?;
     handle.post(true)?;
     let mut headers = List::new();
     headers.append("Content-Type: application/json")?;
@@ -165,14 +172,14 @@ fn new_user(matches: &ArgMatches) -> Result<(), Error> {
     Ok(())
 }
 
-fn login_user(matches: &ArgMatches) -> Result<(), Error> {
+fn login_user(matches: &ArgMatches, server: &str) -> Result<(), Error> {
     let user = matches.value_of("user").expect("no username set");
     let pass = matches.value_of("pass").expect("no password set");
 
     info!("login_user: user=\"{}\" pass=\"{}\"", user, pass);
 
     let mut handle = Easy::new();
-    handle.url(&format!("http://localhost:8000/ktra/api/v1/login/{}", user))?;
+    handle.url(&format!("http://{}/ktra/api/v1/login/{}", server, user))?;
     handle.post(true)?;
     let mut headers = List::new();
     headers.append("Content-Type: application/json")?;
@@ -195,7 +202,7 @@ fn login_user(matches: &ArgMatches) -> Result<(), Error> {
     Ok(())
 }
 
-fn change_password(matches: &ArgMatches) -> Result<(), Error> {
+fn change_password(matches: &ArgMatches, server: &str) -> Result<(), Error> {
     let user = matches.value_of("user").expect("no username set");
     let old_pass = matches.value_of("old_pass").expect("no password set");
     let new_pass = matches.value_of("new_pass").expect("no password set");
@@ -207,8 +214,8 @@ fn change_password(matches: &ArgMatches) -> Result<(), Error> {
 
     let mut handle = Easy::new();
     handle.url(&format!(
-        "http://localhost:8000/ktra/api/v1/change_password/{}",
-        user
+        "http://{}/ktra/api/v1/change_password/{}",
+        server, user,
     ))?;
     handle.post(true)?;
     let mut headers = List::new();
