@@ -1,21 +1,26 @@
 use std::error::Error as StdError;
 use std::fmt::{Display, Error as FmtError, Formatter};
-use std::io::{stdout, Write};
 
 use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
 use curl::easy::{Easy, List};
 use curl::Error as CurlError;
 use log::*;
+use serde::Deserialize;
+use serde_json::Error as JsonError;
 
 #[derive(Debug)]
 enum Error {
+    NoServerResponse,
     Curl(CurlError),
+    Json(JsonError),
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
         match self {
+            Self::NoServerResponse => write!(f, "No response from the server"),
             Self::Curl(e) => write!(f, "Curl error: {}", e),
+            Self::Json(e) => write!(f, "JSON error: {}", e),
         }
     }
 }
@@ -24,6 +29,7 @@ impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Curl(ref e) => Some(e),
+            Self::Json(ref e) => Some(e),
             _ => None,
         }
     }
@@ -32,6 +38,12 @@ impl StdError for Error {
 impl From<CurlError> for Error {
     fn from(e: CurlError) -> Self {
         Self::Curl(e)
+    }
+}
+
+impl From<JsonError> for Error {
+    fn from(e: JsonError) -> Self {
+        Self::Json(e)
     }
 }
 
@@ -67,12 +79,7 @@ fn main() -> Result<(), Error> {
                         .required(true)
                         .validator(username_validator),
                 )
-                .arg(
-                    Arg::with_name("pass")
-                        .empty_values(true)
-                        .required(true)
-                        .validator(password_validator),
-                ),
+                .arg(Arg::with_name("pass").empty_values(true).required(true)),
         )
         .subcommand(
             SubCommand::with_name("login")
@@ -83,12 +90,7 @@ fn main() -> Result<(), Error> {
                         .required(true)
                         .validator(username_validator),
                 )
-                .arg(
-                    Arg::with_name("pass")
-                        .empty_values(true)
-                        .required(true)
-                        .validator(password_validator),
-                ),
+                .arg(Arg::with_name("pass").empty_values(true).required(true)),
         )
         .subcommand(
             SubCommand::with_name("password")
@@ -99,18 +101,8 @@ fn main() -> Result<(), Error> {
                         .required(true)
                         .validator(username_validator),
                 )
-                .arg(
-                    Arg::with_name("old_pass")
-                        .empty_values(true)
-                        .required(true)
-                        .validator(password_validator),
-                )
-                .arg(
-                    Arg::with_name("new_pass")
-                        .empty_values(true)
-                        .required(true)
-                        .validator(password_validator),
-                ),
+                .arg(Arg::with_name("old_pass").empty_values(true).required(true))
+                .arg(Arg::with_name("new_pass").empty_values(true).required(true)),
         )
         .get_matches();
 
@@ -132,11 +124,6 @@ fn username_validator(_username: String) -> Result<(), String> {
     Ok(())
 }
 
-fn password_validator(_password: String) -> Result<(), String> {
-    // TODO:
-    Ok(())
-}
-
 fn new_user(matches: &ArgMatches) -> Result<(), Error> {
     let user = matches.value_of("user").expect("no username set");
     let pass = matches.value_of("pass").expect("no password set");
@@ -152,16 +139,20 @@ fn new_user(matches: &ArgMatches) -> Result<(), Error> {
     let mut headers = List::new();
     headers.append("Content-Type: application/json")?;
     handle.http_headers(headers)?;
-    handle.post_fields_copy(format!("{{\"password\":\"{}\"}}", pass).as_bytes())?;
+    handle.post_fields_copy(
+        format!("{{\"password\":{}}}", serde_json::to_string(pass)?).as_bytes(),
+    )?;
 
+    let mut response = None;
     {
         let mut transfer = handle.transfer();
         transfer.write_function(|new_data| {
-            stdout().write_all(new_data).unwrap();
+            response = Some(serde_json::from_slice::<KtraResponse>(new_data));
             Ok(new_data.len())
         })?;
         transfer.perform()?;
     }
+    response.ok_or(Error::NoServerResponse)??.print();
 
     Ok(())
 }
@@ -178,16 +169,20 @@ fn login_user(matches: &ArgMatches) -> Result<(), Error> {
     let mut headers = List::new();
     headers.append("Content-Type: application/json")?;
     handle.http_headers(headers)?;
-    handle.post_fields_copy(format!("{{\"password\":\"{}\"}}", pass).as_bytes())?;
+    handle.post_fields_copy(
+        format!("{{\"password\":{}}}", serde_json::to_string(pass)?).as_bytes(),
+    )?;
 
+    let mut response = None;
     {
         let mut transfer = handle.transfer();
         transfer.write_function(|new_data| {
-            stdout().write_all(new_data).unwrap();
+            response = Some(serde_json::from_slice::<KtraResponse>(new_data));
             Ok(new_data.len())
         })?;
         transfer.perform()?;
     }
+    response.ok_or(Error::NoServerResponse)??.print();
 
     Ok(())
 }
@@ -213,20 +208,83 @@ fn change_password(matches: &ArgMatches) -> Result<(), Error> {
     handle.http_headers(headers)?;
     handle.post_fields_copy(
         format!(
-            "{{\"old_password\":\"{}\",\"new_password\":\"{}\"}}",
-            old_pass, new_pass
+            "{{\"old_password\":{},\"new_password\":{}}}",
+            serde_json::to_string(old_pass)?,
+            serde_json::to_string(new_pass)?
         )
         .as_bytes(),
     )?;
 
+    let mut response = None;
     {
         let mut transfer = handle.transfer();
         transfer.write_function(|new_data| {
-            stdout().write_all(new_data).unwrap();
+            response = Some(serde_json::from_slice::<KtraResponse>(new_data));
             Ok(new_data.len())
         })?;
         transfer.perform()?;
     }
+    response.ok_or(Error::NoServerResponse)??.print();
 
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct KtraResponse {
+    token: Option<String>,
+    errors: Option<Vec<KtraError>>,
+}
+
+impl KtraResponse {
+    fn print(&self) {
+        if let Some(errors) = self.errors.as_ref() {
+            eprintln!("Received errors:");
+            for error in errors.iter() {
+                eprintln!("- {}", error.detail);
+            }
+        } else if let Some(token) = self.token.as_ref() {
+            print!("Token: {}", token);
+        } else {
+            panic!("Neither token nor errors exist");
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct KtraError {
+    detail: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_deserialize_token() -> Result<(), Error> {
+        let rsp: KtraResponse =
+            serde_json::from_str(r#"{"token":"tokentokentokentokentokentokento"}"#)?;
+
+        let token = rsp.token.as_ref().expect("token not parsed");
+        assert_eq!("tokentokentokentokentokentokento", token);
+        assert!(rsp.errors.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn json_deserialize_error() -> Result<(), Error> {
+        let rsp: KtraResponse = serde_json::from_str(
+            r#"{"errors":[{"detail":"the user identified 'ktra-secure-auth:test' already exists"}]}"#,
+        )?;
+
+        assert!(rsp.token.is_none());
+        let errors = rsp.errors.as_ref().expect("errors not parsed");
+        assert_eq!(1, errors.len());
+        assert_eq!(
+            "the user identified 'ktra-secure-auth:test' already exists",
+            errors[0].detail,
+        );
+
+        Ok(())
+    }
 }
