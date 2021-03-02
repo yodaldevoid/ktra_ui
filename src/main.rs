@@ -119,9 +119,17 @@ fn server_addr_validator(_server_name: String) -> Result<(), String> {
     Ok(())
 }
 
-fn username_validator(_username: String) -> Result<(), String> {
-    // TODO:
-    Ok(())
+fn username_validator(username: String) -> Result<(), String> {
+    if username.is_empty() {
+        Err("usernames may not be empty".to_owned())
+    } else if !username.chars().all(|c| match c {
+        '0'..='9' | 'A'..='Z' | 'a'..='z' | '-' | '.' | '_' | '~' => true,
+        _ => false,
+    }) {
+        Err("usernames may only contain 0-9, A-Z, a-z, '-', '.', '_', and '~'".to_owned())
+    } else {
+        Ok(())
+    }
 }
 
 fn new_user(matches: &ArgMatches) -> Result<(), Error> {
@@ -258,6 +266,37 @@ struct KtraError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn username_validate() {
+        username_validator("Tester1-2.3_4~".to_owned())
+            .expect("validator did not accept valid string");
+    }
+
+    #[test]
+    fn username_validate_empty() {
+        let message =
+            username_validator("".to_owned()).expect_err("validator accepted an empty string");
+        assert_eq!("usernames may not be empty", message);
+    }
+
+    #[test]
+    fn username_validate_invalid_characters() {
+        let valid_message = "usernames may only contain 0-9, A-Z, a-z, '-', '.', '_', and '~'";
+
+        let message = username_validator("\u{0}".to_owned())
+            .expect_err("validator accepted an invalid string");
+        assert_eq!(valid_message, message);
+        let message =
+            username_validator("\\".to_owned()).expect_err("validator accepted an invalid string");
+        assert_eq!(valid_message, message);
+        let message =
+            username_validator(" ".to_owned()).expect_err("validator accepted an invalid string");
+        assert_eq!(valid_message, message);
+        let message =
+            username_validator(">".to_owned()).expect_err("validator accepted an invalid string");
+        assert_eq!(valid_message, message);
+    }
 
     #[test]
     fn json_deserialize_token() -> Result<(), Error> {
