@@ -1,56 +1,13 @@
-use std::error::Error as StdError;
-use std::fmt::{Display, Error as FmtError, Formatter};
-
+use anyhow::{anyhow, Context};
 use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
 use curl::easy::{Easy, List};
-use curl::Error as CurlError;
 use log::*;
 use serde::Deserialize;
-use serde_json::Error as JsonError;
 use url::Url;
 
 const DEFAULT_SERVER: &'static str = "localhost:8000";
 
-#[derive(Debug)]
-enum Error {
-    NoServerResponse,
-    Curl(CurlError),
-    Json(JsonError),
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        match self {
-            Self::NoServerResponse => write!(f, "No response from the server"),
-            Self::Curl(e) => write!(f, "Curl error: {}", e),
-            Self::Json(e) => write!(f, "JSON error: {}", e),
-        }
-    }
-}
-
-impl StdError for Error {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            Self::Curl(ref e) => Some(e),
-            Self::Json(ref e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<CurlError> for Error {
-    fn from(e: CurlError) -> Self {
-        Self::Curl(e)
-    }
-}
-
-impl From<JsonError> for Error {
-    fn from(e: JsonError) -> Self {
-        Self::Json(e)
-    }
-}
-
-fn main() -> Result<(), Error> {
+fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let matches = App::new("Ktra UI")
@@ -117,7 +74,7 @@ fn main() -> Result<(), Error> {
         ("new", Some(sub_m)) => new_user(sub_m, server),
         ("login", Some(sub_m)) => login_user(sub_m, server),
         ("password", Some(sub_m)) => change_password(sub_m, server),
-        (_, _) => panic!("subcommand not matched"),
+        (_, _) => unreachable!(),
     }
 }
 
@@ -142,67 +99,97 @@ fn username_validator(username: String) -> Result<(), String> {
     }
 }
 
-fn new_user(matches: &ArgMatches, server: &str) -> Result<(), Error> {
+fn new_user(matches: &ArgMatches, server: &str) -> anyhow::Result<()> {
     let user = matches.value_of("user").expect("no username set");
     let pass = matches.value_of("pass").expect("no password set");
 
     info!("new_user: user=\"{}\" pass=\"{}\"", user, pass);
 
     let mut handle = Easy::new();
-    handle.url(&format!("http://{}/ktra/api/v1/new_user/{}", server, user))?;
-    handle.post(true)?;
+    handle
+        .url(&format!("http://{}/ktra/api/v1/new_user/{}", server, user))
+        .expect("failed to set URL");
+    handle.post(true).expect("failed to set POST");
     let mut headers = List::new();
-    headers.append("Content-Type: application/json")?;
-    handle.http_headers(headers)?;
-    handle.post_fields_copy(
-        format!("{{\"password\":{}}}", serde_json::to_string(pass)?).as_bytes(),
-    )?;
+    headers
+        .append("Content-Type: application/json")
+        .expect("failed to set content type as JSON");
+    handle.http_headers(headers).expect("failed to set headers");
+    handle
+        .post_fields_copy(
+            format!(
+                "{{\"password\":{}}}",
+                serde_json::to_string(pass).context("Failed to format password as JSON")?,
+            )
+            .as_bytes(),
+        )
+        .expect("failed to set POST fields");
 
     let mut response = None;
     {
         let mut transfer = handle.transfer();
-        transfer.write_function(|new_data| {
-            response = Some(serde_json::from_slice::<KtraResponse>(new_data));
-            Ok(new_data.len())
-        })?;
-        transfer.perform()?;
+        transfer
+            .write_function(|new_data| {
+                response = Some(
+                    serde_json::from_slice::<KtraResponse>(new_data)
+                        .context("Failed to parse server response"),
+                );
+                Ok(new_data.len())
+            })
+            .expect("failed to set write function");
+        transfer.perform().context("Transfer to server failed")?;
     }
-    response.ok_or(Error::NoServerResponse)??.print();
+    response.ok_or(anyhow!("No response from server"))??.print();
 
     Ok(())
 }
 
-fn login_user(matches: &ArgMatches, server: &str) -> Result<(), Error> {
+fn login_user(matches: &ArgMatches, server: &str) -> anyhow::Result<()> {
     let user = matches.value_of("user").expect("no username set");
     let pass = matches.value_of("pass").expect("no password set");
 
     info!("login_user: user=\"{}\" pass=\"{}\"", user, pass);
 
     let mut handle = Easy::new();
-    handle.url(&format!("http://{}/ktra/api/v1/login/{}", server, user))?;
-    handle.post(true)?;
+    handle
+        .url(&format!("http://{}/ktra/api/v1/login/{}", server, user))
+        .expect("failed to set URL");
+    handle.post(true).expect("failed to set POST");
     let mut headers = List::new();
-    headers.append("Content-Type: application/json")?;
-    handle.http_headers(headers)?;
-    handle.post_fields_copy(
-        format!("{{\"password\":{}}}", serde_json::to_string(pass)?).as_bytes(),
-    )?;
+    headers
+        .append("Content-Type: application/json")
+        .expect("failed to set content type as JSON");
+    handle.http_headers(headers).expect("failed to set headers");
+    handle
+        .post_fields_copy(
+            format!(
+                "{{\"password\":{}}}",
+                serde_json::to_string(pass).context("Failed to format password as JSON")?,
+            )
+            .as_bytes(),
+        )
+        .expect("failed to set POST fields");
 
     let mut response = None;
     {
         let mut transfer = handle.transfer();
-        transfer.write_function(|new_data| {
-            response = Some(serde_json::from_slice::<KtraResponse>(new_data));
-            Ok(new_data.len())
-        })?;
-        transfer.perform()?;
+        transfer
+            .write_function(|new_data| {
+                response = Some(
+                    serde_json::from_slice::<KtraResponse>(new_data)
+                        .context("Failed to parse server response"),
+                );
+                Ok(new_data.len())
+            })
+            .expect("failed to set write function");
+        transfer.perform().context("Transfer to server failed")?;
     }
-    response.ok_or(Error::NoServerResponse)??.print();
+    response.ok_or(anyhow!("No response from server"))??.print();
 
     Ok(())
 }
 
-fn change_password(matches: &ArgMatches, server: &str) -> Result<(), Error> {
+fn change_password(matches: &ArgMatches, server: &str) -> anyhow::Result<()> {
     let user = matches.value_of("user").expect("no username set");
     let old_pass = matches.value_of("old_pass").expect("no password set");
     let new_pass = matches.value_of("new_pass").expect("no password set");
@@ -213,33 +200,44 @@ fn change_password(matches: &ArgMatches, server: &str) -> Result<(), Error> {
     );
 
     let mut handle = Easy::new();
-    handle.url(&format!(
-        "http://{}/ktra/api/v1/change_password/{}",
-        server, user,
-    ))?;
-    handle.post(true)?;
+    handle
+        .url(&format!(
+            "http://{}/ktra/api/v1/change_password/{}",
+            server, user,
+        ))
+        .expect("failed to set URL");
+    handle.post(true).expect("failed to set POST");
     let mut headers = List::new();
-    headers.append("Content-Type: application/json")?;
-    handle.http_headers(headers)?;
-    handle.post_fields_copy(
-        format!(
-            "{{\"old_password\":{},\"new_password\":{}}}",
-            serde_json::to_string(old_pass)?,
-            serde_json::to_string(new_pass)?
+    headers
+        .append("Content-Type: application/json")
+        .expect("failed to set content type as JSON");
+    handle.http_headers(headers).expect("failed to set headers");
+    handle
+        .post_fields_copy(
+            format!(
+                "{{\"old_password\":{},\"new_password\":{}}}",
+                serde_json::to_string(old_pass).context("Failed to format old password as JSON")?,
+                serde_json::to_string(new_pass).context("Failed to format new password as JSON")?,
+            )
+            .as_bytes(),
         )
-        .as_bytes(),
-    )?;
+        .expect("failed to set POST fields");
 
     let mut response = None;
     {
         let mut transfer = handle.transfer();
-        transfer.write_function(|new_data| {
-            response = Some(serde_json::from_slice::<KtraResponse>(new_data));
-            Ok(new_data.len())
-        })?;
-        transfer.perform()?;
+        transfer
+            .write_function(|new_data| {
+                response = Some(
+                    serde_json::from_slice::<KtraResponse>(new_data)
+                        .context("Failed to parse server response"),
+                );
+                Ok(new_data.len())
+            })
+            .expect("failed to set write function");
+        transfer.perform().context("Transfer to server failed")?;
     }
-    response.ok_or(Error::NoServerResponse)??.print();
+    response.ok_or(anyhow!("No response from server"))??.print();
 
     Ok(())
 }
@@ -306,22 +304,20 @@ mod tests {
     }
 
     #[test]
-    fn json_deserialize_token() -> Result<(), Error> {
+    fn json_deserialize_token() {
         let rsp: KtraResponse =
-            serde_json::from_str(r#"{"token":"tokentokentokentokentokentokento"}"#)?;
+            serde_json::from_str(r#"{"token":"tokentokentokentokentokentokento"}"#).unwrap();
 
         let token = rsp.token.as_ref().expect("token not parsed");
         assert_eq!("tokentokentokentokentokentokento", token);
         assert!(rsp.errors.is_none());
-
-        Ok(())
     }
 
     #[test]
-    fn json_deserialize_error() -> Result<(), Error> {
+    fn json_deserialize_error() {
         let rsp: KtraResponse = serde_json::from_str(
             r#"{"errors":[{"detail":"the user identified 'ktra-secure-auth:test' already exists"}]}"#,
-        )?;
+        ).unwrap();
 
         assert!(rsp.token.is_none());
         let errors = rsp.errors.as_ref().expect("errors not parsed");
@@ -330,7 +326,5 @@ mod tests {
             "the user identified 'ktra-secure-auth:test' already exists",
             errors[0].detail,
         );
-
-        Ok(())
     }
 }
