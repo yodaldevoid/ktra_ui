@@ -3,6 +3,12 @@ name = "ktra_ui"
 version = "0.1.0"
 authors = ["Gabriel Smith <ga29smith@gmail.com>"]
 edition = "2018"
+license = "MIT OR Apache-2.0"
+description = "A CLI interface to Ktra's web API"
+repository = "https://github.com/yodaldevoid/ktra_ui"
+keywords = ["ktra", "registry", "cargo"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.38"
